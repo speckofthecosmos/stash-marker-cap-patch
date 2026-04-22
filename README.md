@@ -12,7 +12,29 @@ Full behavior details in the PR body: https://github.com/stashapp/stash/pull/685
 
 ## Usage
 
-Requires: Docker, `make`, `git`. Tested on macOS arm64 with OrbStack; should work anywhere Docker does.
+### Option 1: Pull the prebuilt image (recommended)
+
+Multi-arch images (`linux/amd64`, `linux/arm64`) are published to GitHub Container Registry via CI on every push to this repo's `main` branch:
+
+```bash
+docker pull ghcr.io/speckofthecosmos/stash-marker-cap-patch:develop
+```
+
+Then point your `docker-compose.yml` at the image — change your existing Stash service's `image:` line from `stashapp/stash:latest` (or similar) to:
+
+```yaml
+image: ghcr.io/speckofthecosmos/stash-marker-cap-patch:develop
+```
+
+Redeploy and you're running the patched build. A sample compose file is included in this repo.
+
+**Tag options:**
+- `:develop` — always the latest build off stashapp/stash develop + this patch
+- `:develop-<hash>` — pinned to a specific upstream develop commit (for reproducibility)
+
+### Option 2: Build locally
+
+Requires: Docker, `make`, `git`. Useful if you want to build against a different upstream ref, or don't want to depend on the registry.
 
 ```bash
 git clone https://github.com/speckofthecosmos/stash-marker-cap-patch.git
@@ -25,11 +47,9 @@ make image
 make run
 ```
 
-For production use, point your existing `docker-compose.yml` at the resulting `stash-marker-cap:develop` image instead of `stashapp/stash:latest`. A sample compose file is included — copy and adapt the volume paths.
+### Multi-arch local build
 
-## Multi-arch build
-
-The default `make image` builds for your local architecture. If you're building on Apple Silicon but deploying to an x86_64 NAS, use:
+The default `make image` builds for your local architecture. If you're building on Apple Silicon but deploying to an x86_64 NAS:
 
 ```bash
 make image-multi

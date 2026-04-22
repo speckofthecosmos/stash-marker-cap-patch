@@ -7,7 +7,7 @@
 
 services:
   stash:
-    image: stash-marker-cap:develop
+    image: ghcr.io/speckofthecosmos/stash-marker-cap-patch:develop
     container_name: stash-marker-cap
     restart: unless-stopped
     ports:
