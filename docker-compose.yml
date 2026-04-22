@@ -1,0 +1,29 @@
+# Example docker-compose for the patched Stash image.
+# Copy to your own working directory and adapt paths — the volumes below
+# are placeholders, not real library paths.
+#
+# After running `make image` in this repo, this compose file starts a
+# Stash instance using the patched image.
+
+services:
+  stash:
+    image: stash-marker-cap:develop
+    container_name: stash-marker-cap
+    restart: unless-stopped
+    ports:
+      - "9999:9999"
+    environment:
+      - STASH_STASH=/data/
+      - STASH_GENERATED=/generated/
+      - STASH_METADATA=/metadata/
+      - STASH_CACHE=/cache/
+      - STASH_PORT=9999
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      ## Adjust these paths to your library locations
+      - ./config:/root/.stash
+      - ./metadata:/metadata
+      - ./cache:/cache
+      - ./generated:/generated
+      - ./blobs:/blobs
+      # - /path/to/your/library:/data
