@@ -7,10 +7,13 @@
 ##
 ## Usage:
 ##   make image          build for local arch
-##   make image-multi    build for linux/amd64 + linux/arm64 (requires buildx)
 ##   make run            build + run on port 9998 with an ephemeral test config
 ##   make clean          remove build artifacts
 ##   make refresh        re-clone source (throws away local patched tree)
+##
+## For multi-arch builds, use CI (push to main triggers a multi-arch build
+## to ghcr.io). Local multi-arch push needs a registry target and auth,
+## which this Makefile intentionally doesn't try to configure.
 ##
 ## Variables (override with `make VAR=value image`):
 ##   STASH_REF      upstream ref to build from (default: develop)
@@ -26,7 +29,7 @@ TAG        ?= develop
 BUILD_DIR  ?= .build
 SRC_DIR    := $(BUILD_DIR)/stash
 
-.PHONY: all image image-multi run clean refresh patch-check
+.PHONY: all image run clean refresh patch-check
 
 all: image
 
@@ -53,18 +56,6 @@ image: $(SRC_DIR)/.patched Dockerfile
 	    --build-arg STASH_VERSION=$(STASH_REF)-marker-cap \
 	    -t $(IMAGE):$(TAG) \
 	    .
-
-image-multi: $(SRC_DIR)/.patched Dockerfile
-	@echo ">>> Multi-arch build linux/amd64,linux/arm64 — requires buildx"
-	cp Dockerfile $(SRC_DIR)/Dockerfile.markercap
-	cd $(SRC_DIR) && \
-	  docker buildx build \
-	    -f Dockerfile.markercap \
-	    --platform linux/amd64,linux/arm64 \
-	    --build-arg GITHASH=$$(git rev-parse --short HEAD) \
-	    --build-arg STASH_VERSION=$(STASH_REF)-marker-cap \
-	    -t $(IMAGE):$(TAG) \
-	    --load .
 
 run: image
 	@echo ">>> Starting test container on localhost:9998"

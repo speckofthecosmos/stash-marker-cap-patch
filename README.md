@@ -1,8 +1,12 @@
 # stash-marker-cap-patch
 
+[![Build and push image](https://github.com/speckofthecosmos/stash-marker-cap-patch/actions/workflows/build-image.yml/badge.svg)](https://github.com/speckofthecosmos/stash-marker-cap-patch/actions/workflows/build-image.yml)
+
 A Docker build recipe that ships [stashapp/stash](https://github.com/stashapp/stash)'s `develop` branch with [PR #6855](https://github.com/stashapp/stash/pull/6855) applied — making marker preview generation honor the marker's explicit end time instead of silently truncating at 20 seconds.
 
 **This is a transitional artifact.** Once #6855 merges upstream, this repo becomes obsolete. Run `stashapp/stash:develop` directly at that point.
+
+**Images are rebuilt nightly** against the latest upstream develop, so `docker pull ...:develop` stays current without manual intervention. If the patch ever stops applying cleanly (upstream refactored affected files), the CI build fails — at which point the patch needs regeneration.
 
 ## What the patch does
 
@@ -94,9 +98,10 @@ Available variables: `STASH_REPO`, `STASH_REF`, `PATCH`, `IMAGE`, `TAG`, `BUILD_
 
 ## Caveats
 
+- **Don't `docker run` the image bare.** The image inherits upstream Stash's expectation that `/root/.stash/` is mounted as a host volume (for `config.yml`, the database, blobs, etc.). A raw `docker run ghcr.io/...` with no volume mount will exit within seconds with `could not write to provided config path`. Use `docker run -v /path/to/config:/root/.stash ...` or a compose file with a proper volume — see the included `docker-compose.yml`.
 - **Default Node heap.** The upstream Dockerfile's frontend build hits V8 heap OOM on default settings. This repo's Dockerfile sets `NODE_OPTIONS=--max-old-space-size=8192` to work around it.
 - **Not a permanent fork.** This repo is a thin patch-applier. Don't add features here — add them upstream.
-- **Patch drift.** As upstream `develop` moves forward, the patch may stop applying cleanly. If that happens, the patch needs regeneration from the PR branch.
+- **Patch drift.** As upstream `develop` moves forward, the patch may stop applying cleanly. If that happens, the nightly CI build fails with a patch-apply error — the patch needs regeneration from the PR branch.
 
 ## License
 
