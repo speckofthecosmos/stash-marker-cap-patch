@@ -5,12 +5,12 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
-      - 'marker-cap.patch'
       - '.github/workflows/build-image.yml'
   schedule:
-    # Nightly at 03:17 UTC. Early-exit check below compares upstream
-    # develop HEAD to the last-built tag; if unchanged, the build jobs
-    # are skipped entirely (~30s for the check, no ghcr push).
+    # Nightly at 03:17 UTC. The check job below compares the current
+    # upstream-develop HEAD + feature-branch HEAD against the last-built
+    # tag; if both are unchanged, the build jobs are skipped entirely
+    # (~30s for the check, no ghcr push).
     - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
@@ -19,7 +19,7 @@ on:
         default: 'develop'
         type: string
       force:
-        description: 'Force rebuild even if upstream SHA unchanged'
+        description: 'Force rebuild even if upstream + feature SHAs unchanged'
         default: false
         type: boolean
 
@@ -27,6 +27,11 @@ env:
   REGISTRY: ghcr.io
   # Lowercased in jobs because ghcr requires lowercase paths
   IMAGE_NAME: ${{ github.repository }}
+  # The feature lives as a real branch (PR #6855) on the fork. CI merges it
+  # onto fresh upstream develop rather than applying a static patch, so
+  # unrelated upstream drift auto-resolves via git's 3-way merge.
+  FEATURE_REPO: https://github.com/speckofthecosmos/stash.git
+  FEATURE_BRANCH: feat/configurable-marker-preview-duration
 
 jobs:
   check:
@@ -38,9 +43,10 @@ jobs:
       skip: ${{ steps.resolve.outputs.skip }}
       stash_ref: ${{ steps.resolve.outputs.stash_ref }}
       upstream_sha: ${{ steps.resolve.outputs.upstream_sha }}
+      feature_sha: ${{ steps.resolve.outputs.feature_sha }}
       image_lower: ${{ steps.resolve.outputs.image_lower }}
     steps:
-      - name: Resolve ref + skip status
+      - name: Resolve refs + skip status
         id: resolve
         env:
           INPUT_REF: ${{ github.event.inputs.stash_ref }}
@@ -48,6 +54,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          FEATURE_REPO: ${{ env.FEATURE_REPO }}
+          FEATURE_BRANCH: ${{ env.FEATURE_BRANCH }}
         run: |
           REF="${INPUT_REF:-develop}"
           if ! printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
@@ -66,13 +74,23 @@ jobs:
             UPSTREAM_SHA="unknown-$(date -u +%Y%m%d%H%M)"
           fi
           echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
-          echo "Upstream $REF is at $UPSTREAM_SHA"
 
-          # Skip only on scheduled runs when the hash-tagged image already exists.
-          # Push and manual dispatch always rebuild (force flag bypasses too).
+          FEATURE_FULL=$(git ls-remote "$FEATURE_REPO" "refs/heads/$FEATURE_BRANCH" | cut -f1)
+          FEATURE_SHA=$(printf '%s' "$FEATURE_FULL" | cut -c1-7)
+          if [ -z "$FEATURE_SHA" ]; then
+            echo "Could not resolve feature SHA for '$FEATURE_BRANCH'; will proceed with build to surface the failure."
+            FEATURE_SHA="unknown-$(date -u +%Y%m%d%H%M)"
+          fi
+          echo "feature_sha=$FEATURE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Upstream $REF @ $UPSTREAM_SHA + feature $FEATURE_BRANCH @ $FEATURE_SHA"
+
+          # Skip only on scheduled runs when the combined-SHA image already
+          # exists. The dedup tag encodes BOTH the upstream and feature SHAs,
+          # so a rebuild fires when either side moves. Push and manual dispatch
+          # always rebuild (force flag bypasses too).
           SKIP="false"
           if [ "$EVENT_NAME" = "schedule" ] && [ "$INPUT_FORCE" != "true" ]; then
-            TAG="$IMG:$REF-$UPSTREAM_SHA"
+            TAG="$IMG:$REF-$UPSTREAM_SHA-$FEATURE_SHA"
             if docker manifest inspect "$TAG" > /dev/null 2>&1; then
               echo "Image $TAG already exists; skipping build."
               SKIP="true"
@@ -108,18 +126,24 @@ jobs:
       - name: Checkout patch repo
         uses: actions/checkout@v4
 
-      - name: Clone stashapp/stash
+      - name: Clone upstream + merge feature branch
         env:
           STASH_REF: ${{ needs.check.outputs.stash_ref }}
         run: |
-          git clone --depth 1 --branch "$STASH_REF" \
+          # Full history (no --depth) so the 3-way merge has a common ancestor;
+          # blob:none keeps the clone fast while the checkout still materialises
+          # the working tree the Docker build reads from.
+          git clone --filter=blob:none --branch "$STASH_REF" \
             https://github.com/stashapp/stash.git .stash
-
-      - name: Apply patch (dry-run + apply)
-        working-directory: .stash
-        run: |
-          git apply --check ../marker-cap.patch
-          git apply ../marker-cap.patch
+          cd .stash
+          git config user.email "marker-cap-ci@users.noreply.github.com"
+          git config user.name "marker-cap-ci"
+          git remote add feature "$FEATURE_REPO"
+          git fetch feature "$FEATURE_BRANCH"
+          # 3-way merge tolerates unrelated upstream drift that a static patch
+          # cannot. A real conflict (both sides edit the same lines) aborts the
+          # build loudly — the signal to rebase the PR branch onto develop.
+          git merge --no-edit "feature/$FEATURE_BRANCH"
 
       - name: Copy Dockerfile into build context
         run: cp Dockerfile .stash/Dockerfile.markercap
@@ -148,7 +172,7 @@ jobs:
             STASH_VERSION=${{ needs.check.outputs.stash_ref }}-marker-cap
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.description=stashapp/stash + PR #6855 (marker cap) patch
+            org.opencontainers.image.description=stashapp/stash + PR #6855 (marker cap) feature branch
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.platform_pair }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform_pair }}
@@ -199,10 +223,13 @@ jobs:
           IMAGE_LOWER: ${{ needs.check.outputs.image_lower }}
           STASH_REF: ${{ needs.check.outputs.stash_ref }}
           UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
+          FEATURE_SHA: ${{ needs.check.outputs.feature_sha }}
         run: |
+          # The combined-SHA tag is the dedup key the check job tests for.
           docker buildx imagetools create \
             -t "${IMAGE_LOWER}:${STASH_REF}" \
             -t "${IMAGE_LOWER}:${STASH_REF}-${UPSTREAM_SHA}" \
+            -t "${IMAGE_LOWER}:${STASH_REF}-${UPSTREAM_SHA}-${FEATURE_SHA}" \
             $(printf "${IMAGE_LOWER}@sha256:%s " *)
 
       - name: Inspect final manifest
@@ -216,12 +243,14 @@ jobs:
           IMAGE_LOWER: ${{ needs.check.outputs.image_lower }}
           STASH_REF: ${{ needs.check.outputs.stash_ref }}
           UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
+          FEATURE_SHA: ${{ needs.check.outputs.feature_sha }}
         run: |
           {
             echo "### Built and pushed"
             echo "- Image: \`${IMAGE_LOWER}\`"
-            echo "- Tags: \`${STASH_REF}\`, \`${STASH_REF}-${UPSTREAM_SHA}\`"
+            echo "- Tags: \`${STASH_REF}\`, \`${STASH_REF}-${UPSTREAM_SHA}\`, \`${STASH_REF}-${UPSTREAM_SHA}-${FEATURE_SHA}\`"
             echo "- Upstream: \`${STASH_REF}\` @ \`${UPSTREAM_SHA}\`"
+            echo "- Feature: \`${FEATURE_BRANCH}\` @ \`${FEATURE_SHA}\`"
             echo "- Platforms: linux/amd64 (native), linux/arm64 (native via ubuntu-24.04-arm)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -235,8 +264,9 @@ jobs:
         env:
           STASH_REF: ${{ needs.check.outputs.stash_ref }}
           UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
+          FEATURE_SHA: ${{ needs.check.outputs.feature_sha }}
         run: |
           {
             echo "### No rebuild needed"
-            echo "Upstream \`${STASH_REF}\` is at \`${UPSTREAM_SHA}\`; image for this SHA already exists."
+            echo "Upstream \`${STASH_REF}\` @ \`${UPSTREAM_SHA}\` + feature @ \`${FEATURE_SHA}\`; image for this combination already exists."
           } >> "$GITHUB_STEP_SUMMARY"

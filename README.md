@@ -6,7 +6,7 @@ A Docker build recipe that ships [stashapp/stash](https://github.com/stashapp/st
 
 **This is a transitional artifact.** Once #6855 merges upstream, this repo becomes obsolete. Run `stashapp/stash:develop` directly at that point.
 
-**Images are rebuilt nightly** against the latest upstream develop, so `docker pull ...:develop` stays current without manual intervention. If the patch ever stops applying cleanly (upstream refactored affected files), the CI build fails — at which point the patch needs regeneration.
+**Images are rebuilt nightly** against the latest upstream develop, so `docker pull ...:develop` stays current without manual intervention. CI merges the feature branch ([PR #6855](https://github.com/stashapp/stash/pull/6855)) onto fresh `develop` with git's 3-way merge rather than applying a static patch, so unrelated upstream drift auto-resolves. The build only fails if upstream and the feature touch the *same lines* — the signal to rebase the PR branch onto develop.
 
 ## What the patch does
 
